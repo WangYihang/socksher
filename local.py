@@ -5,7 +5,7 @@ import socket
 import sys
 import select
 
-SERVER_HOST = "138.68.86.32"
+SERVER_HOST = "127.0.0.1"
 SERVER_PORT = 8080
 
 
@@ -165,7 +165,6 @@ def run(host, port):
                 connection_socket, connection_address = listen_socket.accept()
                 print "[+] Connected from %s:%d" % (connection_address[0], connection_address[1])
                 handle_socks5(connection_socket)
-
 
 def main():
     host = "127.0.0.1"

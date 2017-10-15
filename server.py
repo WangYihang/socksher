@@ -12,10 +12,13 @@ def decrypt(data):
     return data.decode("hex")
 
 def robust_send(fd, data):
+    print "[+] Sending data robustly"
     sent = fd.send(data)
     while True:
+        print "[+] Sent : %d / %s" % (sent, len(data))
         sent += fd.send(data[sent:])
-        if sent >= len(data):
+        if sent == len(data):
+            "[+]Send Over breaking.."
             return sent
 
 def transfer(src_socket, dst_socket):
@@ -24,12 +27,14 @@ def transfer(src_socket, dst_socket):
     while True:
         r, w, e = select.select(fd_set, [], [])
         if src_socket in r:
+            print "[+] src is readable!"
             data = decrypt(src_socket.recv(BUFFER_SIZE))
             if len(data) <= 0:
                 break
             if robust_send(dst_socket, data) < len(data):
                 return error(src_socket, "Send data size error!") or error(dst_socket, "Send data size error!")
         if dst_socket in r:
+            print "[+] dst is readable!"
             data = dst_socket.recv(BUFFER_SIZE)
             if robust_send(src_socket, encrypt(data)) < len(data):
                 return error(src_socket, "Send data size error!") or error(dst_socket, "Send data size error!")
@@ -65,6 +70,7 @@ def handle_socks5(connection_socket):
     except Exception as e:
         return error(target_socket, str(e)) or error(connection_socket, str(e))
     print "[+] Connect successful!"
+    print "[+] Transfering data"
     transfer(connection_socket, target_socket)
 
 def error(fd, msg):
