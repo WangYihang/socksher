@@ -51,13 +51,19 @@ def handle_socks5(connection_socket):
     # 1. HELO and Select Auth method
     # send version
     client_socks_version = connection_socket.recv(1)
+    data_to_send = client_socks_version
     print "[+] Client socks version : %d" % (ord(client_socks_version))
     if not client_socks_version == server_socks_version:
         return error(connection_socket, "Socks protrol version is not supported!")
     auth_method = None
     client_supported_auth_methods = []
-    for i in range(ord(connection_socket.recv(1))):
-        client_supported_auth_methods.append(connection_socket.recv(1))
+    client_supported_auth_methods_number = ord(connection_socket.recv(1))
+    data_to_send += chr(client_supported_auth_methods_number)
+    for i in range(client_supported_auth_methods_number):
+        client_supported_auth_method = connection_socket.recv(1)
+        print "[+] Client support auth method : %s" % (repr(client_supported_auth_method))
+        data_to_send += client_supported_auth_method
+        client_supported_auth_methods.append(client_supported_auth_method)
     for client_supported_auth_method in client_supported_auth_methods:
         if client_supported_auth_method in server_supported_auth_methods:
             auth_method = client_supported_auth_method
@@ -73,43 +79,46 @@ def handle_socks5(connection_socket):
     # \x03 => UDP_ASSOCIATE
     # send version
     client_socks_version = connection_socket.recv(1)
+    data_to_send += client_socks_version
     if not client_socks_version == server_socks_version:
         return error(connection_socket, "Socks protrol version is not supported!")
     client_command = connection_socket.recv(1)
+    data_to_send += client_command
     if client_command in server_supported_cmd:
         command = client_command
         print "[+] Client command : %d => CONNECT" % (ord(command))
     else:
         return error(connection_socket, "Command is not supported!")
     reserve = connection_socket.recv(1)
+    data_to_send += "\x00"
     if reserve != "\x00":
         return error(connection_socket, "Reserve is not equals to '\\x00'!")
     address_type = connection_socket.recv(1)
-    target_info = address_type
+    data_to_send += address_type
     if address_type == "\x01":
         # IPv4
         target_host = connection_socket.recv(4)
-        target_info += target_host
+        data_to_send += target_host
         target_host = socket.inet_ntoa(target_host)
         print "[+] Client send target host(IPv4) : %s" % (target_host)
         socket_family = socket.AF_INET
     elif address_type == "\x03":
         # Domain name
         target_host = connection_socket.recv(ord(connection_socket.recv(1)))
-        target_info += chr(len(target_host)) + target_host
+        data_to_send += chr(len(target_host)) + target_host
         print "[+] Client send target host(Domain name) : %s" % (target_host)
         socket_family = socket.AF_INET
     elif address_type == "\x04":
         # IPv6
         target_host = connection_socket.recv(16)
-        target_info += target_host
+        data_to_send += target_host
         target_host = socket.inet_ntoa(target_host)
         print "[+] Client send target host(IPv6) : %s" % (target_host)
         socket_family = socket.AF_INET6
     else:
         return error(connection_socket, "Address type is not supported!")
     target_port = connection_socket.recv(2)
-    target_info += target_port
+    data_to_send += target_port
     target_port = (ord(target_port[0]) << 8) + ord(target_port[1])
     print "[+] Client send target port : %s" % (target_port)
     target_socket = socket.socket(socket_family, socket.SOCK_STREAM)
@@ -134,8 +143,11 @@ def handle_socks5(connection_socket):
         msg_to_client += "\x00" * 2
     print "[+] Sending data to client..."
     connection_socket.send(msg_to_client)
-    print "[+] Info to send to server : %s" % (repr(target_info))
-    target_socket.send(target_info)
+    print "[+] Info to send to server : %s" % (repr(data_to_send))
+    target_socket.send(data_to_send)
+    # Play as an socks client
+    target_socket.recv(2)
+    target_socket.recv(10)
     transfer(connection_socket, target_socket)
 
 
