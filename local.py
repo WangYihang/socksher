@@ -5,14 +5,17 @@ import socket
 import sys
 import select
 
-SERVER_HOST = "192.168.187.130"
-SERVER_PORT = 8888
+SERVER_HOST = "138.68.86.32"
+SERVER_PORT = 8080
+
 
 def encrypt(data):
     return data.encode("hex")
 
+
 def decrypt(data):
     return data.decode("hex")
+
 
 def robust_send(fd, data):
     sent = fd.send(data)
@@ -20,6 +23,7 @@ def robust_send(fd, data):
         sent += fd.send(data[sent:])
         if sent >= len(data):
             return sent
+
 
 def transfer(src_socket, dst_socket):
     fd_set = [src_socket, dst_socket]
@@ -39,6 +43,7 @@ def transfer(src_socket, dst_socket):
             if len(data) <= 0:
                 break
     return error(src_socket, "Receive data error, Breaking!") or error(dst_socket, "Receive data error, Breaking!")
+
 
 def handle_socks5(connection_socket):
     server_supported_auth_methods = ["\x00"]
@@ -91,7 +96,7 @@ def handle_socks5(connection_socket):
     elif address_type == "\x03":
         # Domain name
         target_host = connection_socket.recv(ord(connection_socket.recv(1)))
-        target_info += target_host
+        target_info += chr(len(target_host)) + target_host
         print "[+] Client send target host(Domain name) : %s" % (target_host)
         socket_family = socket.AF_INET
     elif address_type == "\x04":
@@ -118,8 +123,8 @@ def handle_socks5(connection_socket):
         return error(target_socket, str(e)) or error(connection_socket, str(e))
     msg_to_client = ""
     msg_to_client += server_socks_version
-    msg_to_client += "\x00" # Connect success
-    msg_to_client += "\x00" # Reserve
+    msg_to_client += "\x00"  # Connect success
+    msg_to_client += "\x00"  # Reserve
     msg_to_client += address_type
     if address_type == "\x04":
         msg_to_client += "\x00" * 6
@@ -133,6 +138,7 @@ def handle_socks5(connection_socket):
     target_socket.send(target_info)
     transfer(connection_socket, target_socket)
 
+
 def error(fd, msg):
     print "[-] %s" % (msg)
     try:
@@ -141,6 +147,7 @@ def error(fd, msg):
     except Exception as e:
         print "[-] Exception : %s" % (str(e))
     return False
+
 
 def run(host, port):
     print "[+] Starting server at %s:%d" % (host, port)
@@ -152,17 +159,19 @@ def run(host, port):
     write_fds = []
     error_fds = []
     while True:
-        r, w, e = select.select(read_fds, write_fds,  error_fds)
+        r, w, e = select.select(read_fds, write_fds, error_fds)
         for i in r:
             if i == listen_socket:
                 connection_socket, connection_address = listen_socket.accept()
                 print "[+] Connected from %s:%d" % (connection_address[0], connection_address[1])
                 handle_socks5(connection_socket)
 
+
 def main():
     host = "127.0.0.1"
     port = 1080
     run(host, port)
+
 
 if __name__ == "__main__":
     main()

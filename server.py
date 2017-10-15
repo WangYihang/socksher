@@ -48,7 +48,7 @@ def handle_socks5(connection_socket):
         # Domain name
         target_host = connection_socket.recv(ord(connection_socket.recv(1)))
         print "[+] Client send target host(Domain name) : %s" % (target_host)
-        socket_family = socket.AF_INET
+        socket_family = socket.AF_INET6
     elif address_type == "\x04":
         # IPv6
         target_host = socket.inet_ntoa(connection_socket.recv(16))
@@ -58,12 +58,13 @@ def handle_socks5(connection_socket):
         return error(connection_socket, "Address type is not supported!")
     target_port = (ord(connection_socket.recv(1)) << 8) + ord(connection_socket.recv(1))
     print "[+] Client send target port : %s" % (target_port)
-    print "[+] Connecting : %s:%d" % (target_host, target_port)
     target_socket = socket.socket(socket_family, socket.SOCK_STREAM)
+    print "[+] Connecting : %s:%d" % (repr(target_host), target_port)
     try:
         target_socket.connect((target_host, target_port))
     except Exception as e:
         return error(target_socket, str(e)) or error(connection_socket, str(e))
+    print "[+] Connect successful!"
     transfer(connection_socket, target_socket)
 
 def error(fd, msg):
@@ -94,7 +95,7 @@ def run(host, port):
 
 def main():
     host = "0.0.0.0"
-    port = 4444
+    port = 8080
     run(host, port)
 
 if __name__ == "__main__":
