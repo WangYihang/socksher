@@ -1,187 +1,294 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+# 一个简单的 Socks5 代理服务器 , 只有 server 端 , 而且代码比较乱
+# 不是很稳定 , 而且使用多线程并不是 select 模型
+# Author : WangYihang <wangyihanger@gmail.com>
+
 
 import socket
+import threading
 import sys
-import select
 
 SERVER_HOST = "127.0.0.1"
 SERVER_PORT = 8080
 
-
 def encrypt(data):
     return data.encode("hex")
-
 
 def decrypt(data):
     return data.decode("hex")
 
+def handle(buffer):
+    return buffer
 
-def robust_send(fd, data):
-    sent = fd.send(data)
+def transfer(src, dst, direction):
+    src_name = src.getsockname()
+    src_address = src_name[0]
+    src_port = src_name[1]
+    dst_name = dst.getsockname()
+    dst_address = dst_name[0]
+    dst_port = dst_name[1]
+    print "[+] Starting transfer [%s:%d] => [%s:%d]" % (src_name, src_port, dst_name, dst_port)
     while True:
-        sent += fd.send(data[sent:])
-        if sent >= len(data):
-            return sent
-
-
-def transfer(src_socket, dst_socket):
-    fd_set = [src_socket, dst_socket]
-    BUFFER_SIZE = 0x400
-    while True:
-        r, w, e = select.select(fd_set, [], [])
-        if src_socket in r:
-            data = src_socket.recv(BUFFER_SIZE)
-            if len(data) <= 0:
-                break
-            if robust_send(dst_socket, encrypt(data)) < len(data):
-                return error(src_socket, "Send data size error!") or error(dst_socket, "Send data size error!")
-        if dst_socket in r:
-            data = decrypt(dst_socket.recv(BUFFER_SIZE))
-            if robust_send(src_socket, data) < len(data):
-                return error(src_socket, "Send data size error!") or error(dst_socket, "Send data size error!")
-            if len(data) <= 0:
-                break
-    return error(src_socket, "Receive data error, Breaking!") or error(dst_socket, "Receive data error, Breaking!")
-
-
-def handle_socks5(connection_socket):
-    server_supported_auth_methods = ["\x00"]
-    server_socks_version = "\x05"
-    # 1. HELO and Select Auth method
-    # send version
-    client_socks_version = connection_socket.recv(1)
-    data_to_send = client_socks_version
-    print "[+] Client socks version : %d" % (ord(client_socks_version))
-    if not client_socks_version == server_socks_version:
-        return error(connection_socket, "Socks protrol version is not supported!")
-    auth_method = None
-    client_supported_auth_methods = []
-    client_supported_auth_methods_number = ord(connection_socket.recv(1))
-    data_to_send += chr(client_supported_auth_methods_number)
-    for i in range(client_supported_auth_methods_number):
-        client_supported_auth_method = connection_socket.recv(1)
-        print "[+] Client support auth method : %s" % (repr(client_supported_auth_method))
-        data_to_send += client_supported_auth_method
-        client_supported_auth_methods.append(client_supported_auth_method)
-    for client_supported_auth_method in client_supported_auth_methods:
-        if client_supported_auth_method in server_supported_auth_methods:
-            auth_method = client_supported_auth_method
-            print "[+] Selected auth method : %d" % (ord(auth_method))
+        buffer = src.recv(0x1000)
+        # print "[+] Buffer: %s" %  (repr(buffer))
+        if not buffer:
+            print "[-] No data received! Breaking..."
             break
-    if auth_method == None:
-        return error(connection_socket, "Auth method is not supported!")
-    connection_socket.send(server_socks_version + auth_method)
-    # 2. Select cmd
-    server_supported_cmd = ["\x01"]
-    # \x01 => CONNECT
-    # \x02 => BIND
-    # \x03 => UDP_ASSOCIATE
-    # send version
-    client_socks_version = connection_socket.recv(1)
-    data_to_send += client_socks_version
-    if not client_socks_version == server_socks_version:
-        return error(connection_socket, "Socks protrol version is not supported!")
-    client_command = connection_socket.recv(1)
-    data_to_send += client_command
-    if client_command in server_supported_cmd:
-        command = client_command
-        print "[+] Client command : %d => CONNECT" % (ord(command))
+        if direction:
+            buffer = encrypt(buffer)
+            print "[+] %s:%d => %s:%d => Length : [%s]" % (src_address, src_port, dst_address, dst_port, repr(buffer))
+        else:
+            buffer = decrypt(buffer)
+            print "[+] %s:%d <= %s:%d => Length : [%s]" % (src_address, src_port, dst_address, dst_port, repr(buffer))
+        # print "[+] %s:%d => %s:%d [%s]" % (src_address, src_port, dst_address, dst_port, repr(buffer))
+        dst.send(handle(buffer))
+    print "[+] Closing connecions! [%s:%d]" % (src_address, src_port)
+    src.close()
+    print "[+] Closing connecions! [%s:%d]" % (dst_address, dst_port)
+    dst.close()
+
+
+SOCKS_VERSION = 5
+
+ERROR_VERSION = "[-] Client version error!"
+ERROR_METHOD = "[-] Client method error!"
+
+# ALLOWED_METHOD = [0, 2]
+ALLOWED_METHOD = [0]
+
+def socks_selection(connection_socket):
+    client_version = ord(connection_socket.recv(1))
+    print "[+] client version : %d" % (client_version)
+    if not client_version == SOCKS_VERSION:
+        connection_socket.shutdown(socket.SHUT_RDWR)
+        connection_socket.close()
+        return (False, ERROR_VERSION)
+    support_method_number = ord(connection_socket.recv(1))
+    print "[+] Client Supported method number : %d" % (support_method_number)
+    support_methods = []
+    for i in range(support_method_number):
+        method = ord(connection_socket.recv(1))
+        print "[+] Client Method : %d" % (method)
+        support_methods.append(method)
+    selected_method = None
+    for method in ALLOWED_METHOD:
+        if method in support_methods:
+            selected_method = 0
+    if selected_method == None:
+        connection_socket.shutdown(socket.SHUT_RDWR)
+        connection_socket.close()
+        return (False, ERROR_METHOD)
+    print "[+] Server select method : %d" % (selected_method)
+    response = chr(SOCKS_VERSION) + chr(selected_method)
+    connection_socket.send(response)
+    return (True, connection_socket)
+
+
+CONNECT = 1
+BIND = 2
+UDP_ASSOCIATE = 3
+
+IPV4 = 1
+DOMAINNAME = 3
+IPV6 = 4
+
+CONNECT_SUCCESS = 0
+
+ERROR_ATYPE = "[-] Client address error!"
+
+RSV = 0
+BNDADDR = "\x00" * 4
+BNDPORT = "\x00" * 2
+
+def socks_request(local_socket):
+    data_to_send = ""
+    client_version = ord(local_socket.recv(1))
+    data_to_send += chr(client_version)
+    data_to_send += "\x01\x00" # auth method number ; noauth request
+    data_to_send += chr(client_version)
+    print "[+] client version : %d" % (client_version)
+    if not client_version == SOCKS_VERSION:
+        local_socket.shutdown(socket.SHUT_RDWR)
+        local_socket.close()
+        return (False, ERROR_VERSION)
+    cmd = ord(local_socket.recv(1))
+    data_to_send += chr(cmd)
+    if cmd == CONNECT:
+        print "[+] CONNECT request from client"
+        rsv  = ord(local_socket.recv(1))
+        data_to_send += chr(rsv)
+        if rsv != 0:
+            local_socket.shutdown(socket.SHUT_RDWR)
+            local_socket.close()
+            return (False, ERROR_RSV)
+        atype = ord(local_socket.recv(1))
+        data_to_send += chr(atype)
+        if atype == IPV4:
+            dst_address = local_socket.recv(4)
+            data_to_send += dst_address
+            dst_address = ("".join(["%d." % (ord(i)) for i in dst_address]))[0:-1]
+            print "[+] IPv4 : %s" % (dst_address)
+            dst_port = local_socket.recv(2)
+            data_to_send += dst_port
+            dst_port = ord(dst_port[0]) * 0x100 + ord(dst_port[1])
+            print "[+] Port : %s" % (dst_port)
+            remote_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                print "[+] Connecting : %s:%s" % (dst_address, dst_port)
+                remote_socket.connect((SERVER_HOST, SERVER_PORT))
+                response = ""
+                response += chr(SOCKS_VERSION)
+                response += chr(CONNECT_SUCCESS)
+                response += chr(RSV)
+                response += chr(IPV4)
+                response += BNDADDR
+                response += BNDPORT
+                local_socket.send(response)
+                remote_socket.send(data_to_send)
+                remote_socket.recv(2)
+                remote_socket.recv(10)
+                print "[+] Tunnel connected! Tranfering data..."
+                s = threading.Thread(target=transfer, args=(
+                    remote_socket, local_socket, False))
+                s.start()
+                r = threading.Thread(target=transfer, args=(
+                    local_socket, remote_socket, True))
+                r.start()
+                return (True, (local_socket, remote_socket))
+            except socket.error as e:
+                print e
+                remote_socket.shutdown(socket.SHUT_RDWR)
+                remote_socket.close()
+                local_socket.shutdown(socket.SHUT_RDWR)
+                local_socket.close()
+        elif atype == DOMAINNAME:
+            domainname_length = ord(local_socket.recv(1))
+            data_to_send += chr(domainname_length)
+            domainname = ""
+            for i in range(domainname_length):
+                domainname += (local_socket.recv(1))
+            data_to_send += domainname
+            print "[+] Domain name : %s" % (domainname)
+            dst_port = local_socket.recv(2)
+            data_to_send += dst_port
+            dst_port = ord(dst_port[0]) * 0x100 + ord(dst_port[1])
+            print "[+] Port : %s" % (dst_port)
+            remote_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                print "[+] Connecting : %s:%s" % (domainname, dst_port)
+                remote_socket.connect((domainname, dst_port))
+                response = ""
+                response += chr(SOCKS_VERSION)
+                response += chr(CONNECT_SUCCESS)
+                response += chr(RSV)
+                response += chr(IPV4)
+                response += BNDADDR
+                response += BNDPORT
+                local_socket.send(response)
+                print "[+] Tunnel connected! Tranfering data..."
+                s = threading.Thread(target=transfer, args=(
+                    remote_socket, local_socket, False))
+                s.start()
+                r = threading.Thread(target=transfer, args=(
+                    local_socket, remote_socket, True))
+                r.start()
+                return (True, (local_socket, remote_socket))
+            except socket.error as e:
+                print e
+                remote_socket.shutdown(socket.SHUT_RDWR)
+                remote_socket.close()
+                local_socket.shutdown(socket.SHUT_RDWR)
+                local_socket.close()
+        elif atype == IPV6:
+            dst_address = int(local_socket.recv(4).encode("hex"), 16)
+            print "[+] IPv6 : %x" % (dst_address)
+            dst_port = local_socket.recv(2)
+            data_to_send += dst_port
+            dst_port = ord(dst_port[0]) * 0x100 + ord(dst_port[1])
+            print "[+] Port : %s" % (dst_port)
+            remote_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+            remote_socket.connect((dst_address, dst_port))
+            local_socket.shutdown(socket.SHUT_RDWR)
+            local_socket.close()
+            return (False, ERROR_ATYPE)
+        else:
+            local_socket.shutdown(socket.SHUT_RDWR)
+            local_socket.close()
+            return (False, ERROR_ATYPE)
+    elif cmd == BIND:
+        # TODO
+        local_socket.shutdown(socket.SHUT_RDWR)
+        local_socket.close()
+        return (False, ERROR_CMD)
+    elif cmd == UDP_ASSOCIATE:
+        # TODO
+        local_socket.shutdown(socket.SHUT_RDWR)
+        local_socket.close()
+        return (False, ERROR_CMD)
     else:
-        return error(connection_socket, "Command is not supported!")
-    reserve = connection_socket.recv(1)
-    data_to_send += "\x00"
-    if reserve != "\x00":
-        return error(connection_socket, "Reserve is not equals to '\\x00'!")
-    address_type = connection_socket.recv(1)
-    data_to_send += address_type
-    if address_type == "\x01":
-        # IPv4
-        target_host = connection_socket.recv(4)
-        data_to_send += target_host
-        target_host = socket.inet_ntoa(target_host)
-        print "[+] Client send target host(IPv4) : %s" % (target_host)
-        socket_family = socket.AF_INET
-    elif address_type == "\x03":
-        # Domain name
-        target_host = connection_socket.recv(ord(connection_socket.recv(1)))
-        data_to_send += chr(len(target_host)) + target_host
-        print "[+] Client send target host(Domain name) : %s" % (target_host)
-        socket_family = socket.AF_INET
-    elif address_type == "\x04":
-        # IPv6
-        target_host = connection_socket.recv(16)
-        data_to_send += target_host
-        target_host = socket.inet_ntoa(target_host)
-        print "[+] Client send target host(IPv6) : %s" % (target_host)
-        socket_family = socket.AF_INET6
-    else:
-        return error(connection_socket, "Address type is not supported!")
-    target_port = connection_socket.recv(2)
-    data_to_send += target_port
-    target_port = (ord(target_port[0]) << 8) + ord(target_port[1])
-    print "[+] Client send target port : %s" % (target_port)
-    target_socket = socket.socket(socket_family, socket.SOCK_STREAM)
-    # print "[+] Connecting : %s:%d" % (target_host, target_port)
+        local_socket.shutdown(socket.SHUT_RDWR)
+        local_socket.close()
+        return (False, ERROR_CMD)
+    return (True, local_socket)
+
+def server(local_host, local_port, max_connection):
     try:
-        # target_socket.connect((target_host, target_port))
-        print "[+] Trying to connect to server : %s:%d" % (SERVER_HOST, SERVER_PORT)
-        target_socket.connect((SERVER_HOST, SERVER_PORT))
-        print "[+] Connected!"
-    except Exception as e:
-        return error(target_socket, str(e)) or error(connection_socket, str(e))
-    msg_to_client = ""
-    msg_to_client += server_socks_version
-    msg_to_client += "\x00"  # Connect success
-    msg_to_client += "\x00"  # Reserve
-    msg_to_client += address_type
-    if address_type == "\x04":
-        msg_to_client += "\x00" * 6
-        msg_to_client += "\x00" * 2
-    else:
-        msg_to_client += "\x00" * 4
-        msg_to_client += "\x00" * 2
-    print "[+] Sending data to client..."
-    connection_socket.send(msg_to_client)
-    print "[+] Info to send to server : %s" % (repr(data_to_send))
-    target_socket.send(data_to_send)
-    # Play as an socks client
-    target_socket.recv(2)
-    target_socket.recv(10)
-    transfer(connection_socket, target_socket)
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server_socket.bind((local_host, local_port))
+        server_socket.listen(max_connection)
+        print '[+] Server started [%s:%d]' % (local_host, local_port)
+        while True:
+            local_socket, local_address = server_socket.accept()
+            print '[+] Detect connection from [%s:%s]' % (local_address[0], local_address[1])
+            result = socks_selection(local_socket)
+            if not result[0]:
+                print "[-] socks selection error!"
+                break
+            result = socks_request(result[1])
+            if not result[0]:
+                print "[-] socks request error!"
+                break
+            # local_socket, remote_socket = result[1]
+            # TODO : loop all socket to close...
+        print "[+] Releasing resources..."
+        local_socket.close()
+        print "[+] Closing server..."
+        server_socket.close()
+        print "[+] Server shuted down!"
+    except  KeyboardInterrupt:
+        print ' Ctl-C stop server'
+        try:
+            remote_socket.close()
+        except:
+            pass
+        try:
+            local_socket.close()
+        except:
+            pass
+        try:
+            server_socket.close()
+        except:
+            pass
+        return
 
-
-def error(fd, msg):
-    print "[-] %s" % (msg)
-    try:
-        fd.shutdown(socket.SHUT_RDWR)
-        fd.close()
-    except Exception as e:
-        print "[-] Exception : %s" % (str(e))
-    return False
-
-
-def run(host, port):
-    print "[+] Starting server at %s:%d" % (host, port)
-    listen_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    listen_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, True)
-    listen_socket.bind((host, port))
-    listen_socket.listen(0)
-    read_fds = [listen_socket]
-    write_fds = []
-    error_fds = []
-    while True:
-        r, w, e = select.select(read_fds, write_fds, error_fds)
-        for i in r:
-            if i == listen_socket:
-                connection_socket, connection_address = listen_socket.accept()
-                print "[+] Connected from %s:%d" % (connection_address[0], connection_address[1])
-                handle_socks5(connection_socket)
 
 def main():
-    host = "127.0.0.1"
-    port = 1080
-    run(host, port)
+    if len(sys.argv) != 3:
+        print "Usage : "
+        print "\tpython %s [L_HOST] [L_PORT]" % (sys.argv[0])
+        print "Example : "
+        print "\tpython %s 127.0.0.1 1080" % (sys.argv[0])
+        print "Author : "
+        print "\tWangYihang <wangyihanger@gmail.com>"
+        exit(1)
+    LOCAL_HOST = sys.argv[1]
+    LOCAL_PORT = int(sys.argv[2])
+    #REMOTE_HOST = sys.argv[3]
+    #REMOTE_PORT = int(sys.argv[4])
+    MAX_CONNECTION = 0x10
+    server(LOCAL_HOST, LOCAL_PORT, MAX_CONNECTION)
 
 
 if __name__ == "__main__":
