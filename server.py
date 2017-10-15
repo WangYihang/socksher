@@ -5,6 +5,12 @@ import socket
 import sys
 import select
 
+def encrypt(data):
+    return data.encode("hex")
+
+def decrypt(data):
+    return data.decode("hex")
+
 def robust_send(fd, data):
     sent = fd.send(data)
     while True:
@@ -18,58 +24,20 @@ def transfer(src_socket, dst_socket):
     while True:
         r, w, e = select.select(fd_set, [], [])
         if src_socket in r:
-            data = src_socket.recv(BUFFER_SIZE)
+            data = decrypt(src_socket.recv(BUFFER_SIZE))
             if len(data) <= 0:
                 break
             if robust_send(dst_socket, data) < len(data):
                 return error(src_socket, "Send data size error!") or error(dst_socket, "Send data size error!")
         if dst_socket in r:
             data = dst_socket.recv(BUFFER_SIZE)
-            if robust_send(src_socket, data) < len(data):
+            if robust_send(src_socket, encrypt(data)) < len(data):
                 return error(src_socket, "Send data size error!") or error(dst_socket, "Send data size error!")
             if len(data) <= 0:
                 break
     return error(src_socket, "Receive data error, Breaking!") or error(dst_socket, "Receive data error, Breaking!")
 
 def handle_socks5(connection_socket):
-    server_supported_auth_methods = ["\x00"]
-    server_socks_version = "\x05"
-    # 1. HELO and Select Auth method
-    # send version
-    client_socks_version = connection_socket.recv(1)
-    print "[+] Client socks version : %d" % (ord(client_socks_version))
-    if not client_socks_version == server_socks_version:
-        return error(connection_socket, "Socks protrol version is not supported!")
-    auth_method = None
-    client_supported_auth_methods = []
-    for i in range(ord(connection_socket.recv(1))):
-        client_supported_auth_methods.append(connection_socket.recv(1))
-    for client_supported_auth_method in client_supported_auth_methods:
-        if client_supported_auth_method in server_supported_auth_methods:
-            auth_method = client_supported_auth_method
-            print "[+] Selected auth method : %d" % (ord(auth_method))
-            break
-    if auth_method == None:
-        return error(connection_socket, "Auth method is not supported!")
-    connection_socket.send(server_socks_version + auth_method)
-    # 2. Select cmd
-    server_supported_cmd = ["\x01"]
-    # \x01 => CONNECT
-    # \x02 => BIND
-    # \x03 => UDP_ASSOCIATE
-    # send version
-    client_socks_version = connection_socket.recv(1)
-    if not client_socks_version == server_socks_version:
-        return error(connection_socket, "Socks protrol version is not supported!")
-    client_command = connection_socket.recv(1)
-    if client_command in server_supported_cmd:
-        command = client_command
-        print "[+] Client command : %d => CONNECT" % (ord(command))
-    else:
-        return error(connection_socket, "Command is not supported!")
-    reserve = connection_socket.recv(1)
-    if reserve != "\x00":
-        return error(connection_socket, "Reserve is not equals to '\\x00'!")
     address_type = connection_socket.recv(1)
     if address_type == "\x01":
         # IPv4
@@ -96,18 +64,6 @@ def handle_socks5(connection_socket):
         target_socket.connect((target_host, target_port))
     except Exception as e:
         return error(target_socket, str(e)) or error(connection_socket, str(e))
-    msg_to_client = ""
-    msg_to_client += server_socks_version
-    msg_to_client += "\x00" # Connect success
-    msg_to_client += "\x00" # Reserve
-    msg_to_client += address_type
-    if address_type == "\x04":
-        msg_to_client += "\x00" * 6
-        msg_to_client += "\x00" * 2
-    else:
-        msg_to_client += "\x00" * 4
-        msg_to_client += "\x00" * 2
-    connection_socket.send(msg_to_client)
     transfer(connection_socket, target_socket)
 
 def error(fd, msg):
@@ -137,8 +93,8 @@ def run(host, port):
                 handle_socks5(connection_socket)
 
 def main():
-    host = "127.0.0.1"
-    port = 1080
+    host = "0.0.0.0"
+    port = 4444
     run(host, port)
 
 if __name__ == "__main__":

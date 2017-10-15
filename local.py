@@ -5,6 +5,15 @@ import socket
 import sys
 import select
 
+SERVER_HOST = "192.168.187.130"
+SERVER_PORT = 8888
+
+def encrypt(data):
+    return data.encode("hex")
+
+def decrypt(data):
+    return data.decode("hex")
+
 def robust_send(fd, data):
     sent = fd.send(data)
     while True:
@@ -21,10 +30,10 @@ def transfer(src_socket, dst_socket):
             data = src_socket.recv(BUFFER_SIZE)
             if len(data) <= 0:
                 break
-            if robust_send(dst_socket, data) < len(data):
+            if robust_send(dst_socket, encrypt(data)) < len(data):
                 return error(src_socket, "Send data size error!") or error(dst_socket, "Send data size error!")
         if dst_socket in r:
-            data = dst_socket.recv(BUFFER_SIZE)
+            data = decrypt(dst_socket.recv(BUFFER_SIZE))
             if robust_send(src_socket, data) < len(data):
                 return error(src_socket, "Send data size error!") or error(dst_socket, "Send data size error!")
             if len(data) <= 0:
@@ -71,29 +80,40 @@ def handle_socks5(connection_socket):
     if reserve != "\x00":
         return error(connection_socket, "Reserve is not equals to '\\x00'!")
     address_type = connection_socket.recv(1)
+    target_info = address_type
     if address_type == "\x01":
         # IPv4
-        target_host = socket.inet_ntoa(connection_socket.recv(4))
+        target_host = connection_socket.recv(4)
+        target_info += target_host
+        target_host = socket.inet_ntoa(target_host)
         print "[+] Client send target host(IPv4) : %s" % (target_host)
         socket_family = socket.AF_INET
     elif address_type == "\x03":
         # Domain name
         target_host = connection_socket.recv(ord(connection_socket.recv(1)))
+        target_info += target_host
         print "[+] Client send target host(Domain name) : %s" % (target_host)
         socket_family = socket.AF_INET
     elif address_type == "\x04":
         # IPv6
-        target_host = socket.inet_ntoa(connection_socket.recv(16))
+        target_host = connection_socket.recv(16)
+        target_info += target_host
+        target_host = socket.inet_ntoa(target_host)
         print "[+] Client send target host(IPv6) : %s" % (target_host)
         socket_family = socket.AF_INET6
     else:
         return error(connection_socket, "Address type is not supported!")
-    target_port = (ord(connection_socket.recv(1)) << 8) + ord(connection_socket.recv(1))
+    target_port = connection_socket.recv(2)
+    target_info += target_port
+    target_port = (ord(target_port[0]) << 8) + ord(target_port[1])
     print "[+] Client send target port : %s" % (target_port)
-    print "[+] Connecting : %s:%d" % (target_host, target_port)
     target_socket = socket.socket(socket_family, socket.SOCK_STREAM)
+    # print "[+] Connecting : %s:%d" % (target_host, target_port)
     try:
-        target_socket.connect((target_host, target_port))
+        # target_socket.connect((target_host, target_port))
+        print "[+] Trying to connect to server : %s:%d" % (SERVER_HOST, SERVER_PORT)
+        target_socket.connect((SERVER_HOST, SERVER_PORT))
+        print "[+] Connected!"
     except Exception as e:
         return error(target_socket, str(e)) or error(connection_socket, str(e))
     msg_to_client = ""
@@ -107,7 +127,10 @@ def handle_socks5(connection_socket):
     else:
         msg_to_client += "\x00" * 4
         msg_to_client += "\x00" * 2
+    print "[+] Sending data to client..."
     connection_socket.send(msg_to_client)
+    print "[+] Info to send to server : %s" % (repr(target_info))
+    target_socket.send(target_info)
     transfer(connection_socket, target_socket)
 
 def error(fd, msg):
